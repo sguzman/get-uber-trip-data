@@ -71,14 +71,14 @@ def get_statement_csv(uuid: str) -> str:
 def get_trip_uuids_from_statement():
     while True:
         try:
-            stmt = stmt_queue.get(block=True, timeout=3)
+            stmt = stmt_queue.get(block=True)
             csv = get_statement_csv(stmt)
             lines: List[str] = csv.split('\n')
             lines: List[str] = lines[1:]
             for ln in lines:
                 split: List[str] = ln.split(',')
                 if len(split) > 1:
-                    trip: str = split[6]
+                    trip: str = split[6].replace('"', '')
                     print('trip', trip)
                     trip_queue.put(trip)
         except queue.Empty:
@@ -86,17 +86,32 @@ def get_trip_uuids_from_statement():
             return
 
 
+def get_trip_details() -> None:
+    url: str = 'https://partners.uber.com/p3/payments/api/fetchTripDetails'
+    while True:
+        try:
+            uuid: str = trip_queue.get(block=True)
+            print('Calling', uuid, 'trip data')
+            data = {"tripUUID": uuid}
+            resp = requests.post(url, json=data, headers=get_headers()).text
+            print(resp)
+        except queue.Empty:
+            print('Finished trip queue')
+            return
+
+
 def main() -> None:
-    threading.Thread(target=get_statement_uuids, daemon=True).start()
+    threading.Thread(target=get_statement_uuids).start()
 
     threading.Thread(target=get_trip_uuids_from_statement).start()
     threading.Thread(target=get_trip_uuids_from_statement).start()
     threading.Thread(target=get_trip_uuids_from_statement).start()
     threading.Thread(target=get_trip_uuids_from_statement).start()
-    threading.Thread(target=get_trip_uuids_from_statement).start()
-    threading.Thread(target=get_trip_uuids_from_statement).start()
-    threading.Thread(target=get_trip_uuids_from_statement).start()
-    threading.Thread(target=get_trip_uuids_from_statement).start()
+
+    threading.Thread(target=get_trip_details).start()
+    threading.Thread(target=get_trip_details).start()
+    threading.Thread(target=get_trip_details).start()
+    threading.Thread(target=get_trip_details).start()
 
 
 if __name__ == '__main__':
