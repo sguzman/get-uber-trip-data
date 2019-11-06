@@ -1,9 +1,13 @@
-import csv
 import requests
 import json
 from typing import IO, Dict, List
+import queue
+import threading
 
 statement_url: str = 'https://partners.uber.com/p3/payments/api/fetchPayStatementsPaginated'
+
+stmt_queue = queue.Queue()
+trip_queue = queue.Queue()
 
 
 def get_cookie() -> str:
@@ -40,28 +44,22 @@ def get_statement_page(offset: int) -> json:
     return json_obj
 
 
-def get_statement_uuids(offset: int) -> List[str]:
-    page: json = get_statement_page(offset)
-    stmts = page['data']['payStatementsPaginatedEA']['statements']
-
-    uuids: List[str] = []
-    for stm in stmts:
-        uuids.append(stm['uuid'])
-
-    return uuids
-
-
-def get_all_statement_uuid() -> List[str]:
-    uuids: List[str] = []
-    i = 1
+def get_statement_uuids() -> None:
+    offset = 1
     while True:
-        stmts: List[str] = get_statement_uuids(i)
+        page: json = get_statement_page(offset)
+        stmts = page['data']['payStatementsPaginatedEA']['statements']
         if len(stmts) == 0:
             break
-        uuids.extend(stmts)
-        i += 1
 
-    return uuids
+        for stm in stmts:
+            uuid: str = stm['uuid']
+            print('statement', uuid)
+            stmt_queue.put_nowait(uuid)
+
+        offset += 1
+
+    print('Finished retrieving all statements')
 
 
 def get_statement_csv(uuid: str) -> str:
@@ -70,10 +68,35 @@ def get_statement_csv(uuid: str) -> str:
     return requests.get(url, headers=get_headers(), params={'disable_attachment': '1/print'}).text
 
 
+def get_trip_uuids_from_statement():
+    while True:
+        try:
+            stmt = stmt_queue.get(block=True, timeout=3)
+            csv = get_statement_csv(stmt)
+            lines: List[str] = csv.split('\n')
+            lines: List[str] = lines[1:]
+            for ln in lines:
+                split: List[str] = ln.split(',')
+                if len(split) > 1:
+                    trip: str = split[6]
+                    print('trip', trip)
+                    trip_queue.put(trip)
+        except queue.Empty:
+            print('Finished trip lookup')
+            return
+
+
 def main() -> None:
-    statement_uuids: List[str] = get_all_statement_uuid()
-    for stmt in statement_uuids:
-        print(get_statement_csv(stmt))
+    threading.Thread(target=get_statement_uuids, daemon=True).start()
+
+    threading.Thread(target=get_trip_uuids_from_statement).start()
+    threading.Thread(target=get_trip_uuids_from_statement).start()
+    threading.Thread(target=get_trip_uuids_from_statement).start()
+    threading.Thread(target=get_trip_uuids_from_statement).start()
+    threading.Thread(target=get_trip_uuids_from_statement).start()
+    threading.Thread(target=get_trip_uuids_from_statement).start()
+    threading.Thread(target=get_trip_uuids_from_statement).start()
+    threading.Thread(target=get_trip_uuids_from_statement).start()
 
 
 if __name__ == '__main__':
