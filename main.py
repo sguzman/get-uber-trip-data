@@ -3,7 +3,7 @@ import requests
 import json
 from typing import IO, Dict, List
 
-url: str = 'https://partners.uber.com/p3/payments/api/fetchPayStatementsPaginated'
+statement_url: str = 'https://partners.uber.com/p3/payments/api/fetchPayStatementsPaginated'
 
 
 def get_cookie() -> str:
@@ -33,7 +33,7 @@ def get_statement_page(offset: int) -> json:
             "totalPages": 4,
             "cursors": ["1571466758406", "1541255383715", "1539716406307"]}
     }
-    resp = requests.post(url, data=json.dumps(data), headers=get_headers())
+    resp = requests.post(statement_url, json=data, headers=get_headers())
     json_str: str = resp.text
     json_obj: json = json.loads(json_str)
 
@@ -56,8 +56,6 @@ def get_all_statement_uuid() -> List[str]:
     i = 1
     while True:
         stmts: List[str] = get_statement_uuids(i)
-        print(i, len(stmts), stmts)
-
         if len(stmts) == 0:
             break
         uuids.extend(stmts)
@@ -66,8 +64,16 @@ def get_all_statement_uuid() -> List[str]:
     return uuids
 
 
+def get_statement_csv(uuid: str) -> str:
+    url: str = f'https://partners.uber.com/p3/payments/statements/{uuid}/csv'
+
+    return requests.get(url, headers=get_headers(), params={'disable_attachment': '1/print'}).text
+
+
 def main() -> None:
-    print(get_all_statement_uuid())
+    statement_uuids: List[str] = get_all_statement_uuid()
+    for stmt in statement_uuids:
+        print(get_statement_csv(stmt))
 
 
 if __name__ == '__main__':
