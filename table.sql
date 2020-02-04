@@ -4,7 +4,7 @@ create table trips
 	uuid uuid not null,
 	total float not null,
 	request_at timestamptz not null,
-	dropoff_at timestamptz not null,
+	dropoff_at timestamptz,
 	surge bool not null,
 	distance float not null,
 	duration float not null,
