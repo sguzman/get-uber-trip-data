@@ -1,7 +1,8 @@
-create table uber_trips
+create table trips
 (
 	id serial not null,
 	uuid uuid not null,
+	total float not null,
 	request_at timestamptz not null,
 	dropoff_at timestamptz not null,
 	surge bool not null,
@@ -14,19 +15,19 @@ create table uber_trips
 	custom_route_map text not null
 );
 
-create unique index uber_trips_dropoff_at_uindex
-	on uber_trips (dropoff_at);
+create unique index trips_dropoff_at_uindex
+	on trips (dropoff_at);
 
-create unique index uber_trips_id_uindex
-	on uber_trips (id);
+create unique index trips_id_uindex
+	on trips (id);
 
-create unique index uber_trips_request_at_uindex
-	on uber_trips (request_at);
+create unique index trips_request_at_uindex
+	on trips (request_at);
 
-create unique index uber_trips_uuid_uindex
-	on uber_trips (uuid);
+create unique index trips_uuid_uindex
+	on trips (uuid);
 
-alter table uber_trips
-	add constraint uber_trips_pk
+alter table trips
+	add constraint trips_pk
 		primary key (id);
 
