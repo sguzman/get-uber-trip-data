@@ -22,7 +22,7 @@ class Trip:
 
         tz = pytz.timezone(timezone)
         self.request_at: datetime = datetime.fromtimestamp(request_at, tz)
-        self.dropoff_at: datetime = datetime.fromtimestamp(dropoff_at, tz)
+        self.dropoff_at: Optional[datetime] = Trip.datetime_or_none(dropoff_at, tz)
         self.surge: bool = surge
         self.distance: float = distance
         self.duration: float = duration
@@ -37,6 +37,13 @@ class Trip:
         self.custom_route_map: str = custom_route_map
 
         self.set_lat_lon()
+
+    @staticmethod
+    def datetime_or_none(n: Optional[int], tz) -> Optional[datetime]:
+        if n is None:
+            return None
+
+        return datetime.fromtimestamp(n, tz)
 
     @staticmethod
     def get_pickup_lat(url: str) -> Optional[float]:
@@ -99,10 +106,10 @@ class Trip:
             return None
 
     def set_lat_lon(self):
-        self.get_pickup_lat(self.custom_route_map)
-        self.get_pickup_lon(self.custom_route_map)
-        self.get_dropoff_lat(self.custom_route_map)
-        self.get_dropoff_lon(self.custom_route_map)
+        self.pickup_lat = self.get_pickup_lat(self.custom_route_map)
+        self.pickup_lon = self.get_pickup_lon(self.custom_route_map)
+        self.dropoff_lat = self.get_dropoff_lat(self.custom_route_map)
+        self.dropoff_lon = self.get_dropoff_lon(self.custom_route_map)
 
     def data(self):
         return [
@@ -120,7 +127,7 @@ class Trip:
             self.status,
             self.vehicle_type,
             self.pickup_address,
-            self.dropoff_at,
+            self.dropoff_address,
             self.custom_route_map
         ]
 
@@ -156,7 +163,7 @@ def get_headers() -> Dict[str, str]:
     }
 
 
-def get_trip_data(offset: int) -> json:
+def get_trip_data(offset: int) -> List[Trip]:
     try:
         data = {
             "weekOffset": offset
@@ -166,6 +173,8 @@ def get_trip_data(offset: int) -> json:
         json_obj: json = json.loads(json_str)
 
         data: Dict = json_obj['data']['earnings']['trips']
+        trips: List[Trip] = []
+
         for d in data.keys():
             trip = data[d]
             obj: Trip = Trip(
@@ -183,29 +192,25 @@ def get_trip_data(offset: int) -> json:
                 trip['dropoffAddress'],
                 trip['customRouteMap']
             )
-            print(obj)
+            trips.append(obj)
+
+        return trips
     except Exception as e:
         print(e)
-        return None
+        return []
 
 
-def insert_trip_sql() -> None:
-    insert_sql: str = 'INSERT INTO projects.public.uber_trips (uuid, request_at, dropoff_at, surge, distance, duration, status, vehicle_type, pickup_address, dropoff_address, custom_route_map) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING '
+def insert_trip_sql(trips: List[Trip]) -> None:
+    if len(trips) == 0:
+        return
 
-    t = trip_obj['data']['tripDetails']
-    dropoff_at: Optional[datetime] = None if t['dropoffAt'] is None else datetime.fromtimestamp(t['dropoffAt'])
-    p_lat, p_long, d_lat, d_long = lat_long(t['customRouteMap'])
-
-    data = [
-        t['uuid'], t['vehicleType'], float(t['total']), datetime.fromtimestamp(t['requestAt']),
-        t['isSurge'], float(t['distance']), int(t['duration']), t['pickupAddress'], t['dropoffAddress'],
-        t['status'], t['customRouteMap'], t['chainUuid'], float(t['driverFare']), dropoff_at, p_lat, p_long,
-        d_lat, d_long
-    ]
-    print(data)
+    insert_sql: str = 'INSERT INTO projects.public.trips (uuid, total, request_at, dropoff_at, surge, distance, duration, pickup_lat, pickup_lon, dropoff_lat, dropoff_lon, status, vehicle_type, pickup_address, dropoff_address, custom_route_map) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s , %s , %s , %s , %s , %s ) ON CONFLICT DO NOTHING '
 
     cursor = conn.cursor()
-    cursor.execute(insert_sql, data)
+    for t in trips:
+        data: List = t.data()
+        print('Inserting', data)
+        cursor.execute(insert_sql, data)
 
     conn.commit()
     cursor.close()
@@ -213,9 +218,14 @@ def insert_trip_sql() -> None:
 
 def main() -> None:
     for i in range(200):
-        print(i, get_trip_data(i))
+        trips: List[Trip] = get_trip_data(i)
+        if len(trips) > 0:
+            print(i, len(trips), trips[0])
+        else:
+            print(i, len(trips))
 
-    insert_trip_sql()
+        insert_trip_sql(trips)
+
 
 
 if __name__ == '__main__':
