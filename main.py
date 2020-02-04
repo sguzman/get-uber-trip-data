@@ -220,12 +220,11 @@ def main() -> None:
     for i in range(200):
         trips: List[Trip] = get_trip_data(i)
         if len(trips) > 0:
-            print(i, len(trips), trips[0])
+            print(i, len(trips), trips[0].data())
         else:
             print(i, len(trips))
 
         insert_trip_sql(trips)
-
 
 
 if __name__ == '__main__':
