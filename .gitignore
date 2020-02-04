@@ -104,3 +104,4 @@ venv.bak/
 .mypy_cache/
 cookie.json
 .idea/
+example.json
