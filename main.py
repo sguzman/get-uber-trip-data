@@ -3,21 +3,131 @@ import json
 from datetime import datetime
 
 import psycopg2
+import pytz
 import requests
-import queue
-import threading
 from typing import IO, Dict, List, Optional, Tuple
 
-statement_url: str = 'https://partners.uber.com/p3/payments/api/fetchPayStatementsPaginated'
+statement_url: str = 'https://drivers.uber.com/p3/payments/api/fetchWeeklyEarnings'
 
-stmt_queue = queue.Queue()
-trip_queue = queue.Queue()
-trip_data_queue = queue.Queue()
+
+class Trip:
+    def __init__(self, uuid: str, total: float, timezone: str,
+                 request_at: int, dropoff_at: int, surge: bool,
+                 distance: float, duration: float,
+                 status: str, vehicle_type: str,
+                 pickup_address: str, dropoff_address: str,
+                 custom_route_map: str):
+        self.uuid: str = uuid
+        self.total: float = float(total)
+
+        tz = pytz.timezone(timezone)
+        self.request_at: datetime = datetime.fromtimestamp(request_at, tz)
+        self.dropoff_at: datetime = datetime.fromtimestamp(dropoff_at, tz)
+        self.surge: bool = surge
+        self.distance: float = distance
+        self.duration: float = duration
+        self.pickup_lat: Optional[float] = None
+        self.pickup_lon: Optional[float] = None
+        self.dropoff_lat: Optional[float] = None
+        self.dropoff_lon: Optional[float] = None
+        self.status: str = status
+        self.vehicle_type: str = vehicle_type
+        self.pickup_address: str = pickup_address
+        self.dropoff_address: str = dropoff_address
+        self.custom_route_map: str = custom_route_map
+
+        self.set_lat_lon()
+
+    @staticmethod
+    def get_pickup_lat(url: str) -> Optional[float]:
+        try:
+            params_idx: int = url.index('?')
+            params: str = url[params_idx + 1:]
+            split = params.split('&')
+
+            pickup = split[1].split('7C')
+            pickup = pickup[-1].split('%2C')
+
+            return float(pickup[0])
+        except Exception as e:
+            print(e)
+            return None
+
+    @staticmethod
+    def get_pickup_lon(url: str) -> Optional[float]:
+        try:
+            params_idx: int = url.index('?')
+            params: str = url[params_idx + 1:]
+            split = params.split('&')
+
+            pickup = split[1].split('7C')
+            pickup = pickup[-1].split('%2C')
+
+            return float(pickup[1])
+        except Exception as e:
+            print(e)
+            return None
+
+    @staticmethod
+    def get_dropoff_lat(url: str) -> Optional[float]:
+        try:
+            params_idx: int = url.index('?')
+            params: str = url[params_idx + 1:]
+            split = params.split('&')
+
+            dropoff = split[2].split('7C')
+            dropoff = dropoff[-1].split('%2C')
+
+            return float(dropoff[0])
+        except Exception as e:
+            print(e)
+            return None
+
+    @staticmethod
+    def get_dropoff_lon(url: str) -> Optional[float]:
+        try:
+            params_idx: int = url.index('?')
+            params: str = url[params_idx + 1:]
+            split = params.split('&')
+
+            dropoff = split[2].split('7C')
+            dropoff = dropoff[-1].split('%2C')
+
+            return float(dropoff[1])
+        except Exception as e:
+            print(e)
+            return None
+
+    def set_lat_lon(self):
+        self.get_pickup_lat(self.custom_route_map)
+        self.get_pickup_lon(self.custom_route_map)
+        self.get_dropoff_lat(self.custom_route_map)
+        self.get_dropoff_lon(self.custom_route_map)
+
+    def data(self):
+        return [
+            self.uuid,
+            self.total,
+            self.request_at,
+            self.dropoff_at,
+            self.surge,
+            self.distance,
+            self.duration,
+            self.pickup_lat,
+            self.pickup_lon,
+            self.dropoff_lat,
+            self.dropoff_lon,
+            self.status,
+            self.vehicle_type,
+            self.pickup_address,
+            self.dropoff_at,
+            self.custom_route_map
+        ]
 
 
 def con() -> psycopg2:
     conn: psycopg2 = \
-        psycopg2.connect(user='admin', password='', host='127.0.0.1', port='5432', database='misc')
+        psycopg2.connect(user='admin', password='', host='127.0.0.1', port='5432', database='projects')
 
     def clean_up() -> None:
         conn.close()
@@ -25,6 +135,9 @@ def con() -> psycopg2:
 
     atexit.register(clean_up)
     return conn
+
+
+conn: psycopg2 = con()
 
 
 def get_cookie() -> str:
@@ -43,186 +156,64 @@ def get_headers() -> Dict[str, str]:
     }
 
 
-def get_statement_page(offset: int) -> json:
-    data = {
-        "pageIndex": offset,
-        "pageSize": 100,
-        "pagination": {
-            "hasMoreData": True,
-            "nextCursor": "1539716406307",
-            "pageNumber": 3,
-            "totalPages": 4,
-            "cursors": ["1571466758406", "1541255383715", "1539716406307"]}
-    }
-    resp = requests.post(statement_url, json=data, headers=get_headers())
-    json_str: str = resp.text
-    json_obj: json = json.loads(json_str)
-
-    return json_obj
-
-
-def get_statement_uuids() -> None:
-    offset = 1
-    while True:
-        page: json = get_statement_page(offset)
-        stmts = page['data']['payStatementsPaginatedEA']['statements']
-        if len(stmts) == 0:
-            break
-
-        for stm in stmts:
-            uuid: str = stm['uuid']
-            print('statement', uuid)
-            stmt_queue.put_nowait(uuid)
-
-        offset += 1
-
-    print('Finished retrieving all statements')
-
-
-def get_statement_csv(uuid: str) -> str:
-    url: str = f'https://partners.uber.com/p3/payments/statements/{uuid}/csv'
-
-    return requests.get(url, headers=get_headers(), params={'disable_attachment': '1/print'}).text
-
-
-def get_trip_uuids_from_statement():
-    while True:
-        try:
-            stmt = stmt_queue.get(block=True)
-            csv = get_statement_csv(stmt)
-            lines: List[str] = csv.split('\n')
-            lines: List[str] = lines[1:]
-            for ln in lines:
-                split: List[str] = ln.split(',')
-                if len(split) > 1:
-                    trip: str = split[6].replace('"', '')
-                    print('trip', trip)
-                    trip_queue.put(trip)
-        except queue.Empty:
-            print('Finished trip lookup')
-            return
-
-
-def get_trip_details() -> None:
-    url: str = 'https://partners.uber.com/p3/payments/api/fetchTripDetails'
-    while True:
-        try:
-            uuid: str = trip_queue.get(block=True)
-            print('Calling', uuid, 'trip data')
-            data = {"tripUUID": uuid}
-            resp = requests.post(url, json=data, headers=get_headers()).text
-            print(resp)
-            json_resp = json.loads(resp)
-            trip_data_queue.put_nowait(json_resp)
-        except json.decoder.JSONDecodeError:
-            print('Bad JSON decode')
-            continue
-        except queue.Empty:
-            print('Finished trip queue')
-            return
-
-
-def get_pickup_lat(url: str) -> Optional[float]:
+def get_trip_data(offset: int) -> json:
     try:
-        params_idx: int = url.index('?')
-        params: str = url[params_idx + 1:]
-        split = params.split('&')
+        data = {
+            "weekOffset": offset
+        }
+        resp = requests.post(statement_url, json=data, headers=get_headers())
+        json_str: str = resp.text
+        json_obj: json = json.loads(json_str)
 
-        pickup = split[1].split('7C')
-        pickup = pickup[-1].split('%2C')
-
-        return float(pickup[0])
-    except:
+        data: Dict = json_obj['data']['earnings']['trips']
+        for d in data.keys():
+            trip = data[d]
+            obj: Trip = Trip(
+                trip['uuid'],
+                trip['total'],
+                trip['timezone'],
+                trip['requestAt'],
+                trip['dropoffAt'],
+                trip['isSurge'],
+                trip['distance'],
+                trip['duration'],
+                trip['status'],
+                trip['vehicleType'],
+                trip['pickupAddress'],
+                trip['dropoffAddress'],
+                trip['customRouteMap']
+            )
+            print(obj)
+    except Exception as e:
+        print(e)
         return None
-
-
-def get_pickup_long(url: str) -> Optional[float]:
-    try:
-        params_idx: int = url.index('?')
-        params: str = url[params_idx + 1:]
-        split = params.split('&')
-
-        pickup = split[1].split('7C')
-        pickup = pickup[-1].split('%2C')
-
-        return float(pickup[1])
-    except:
-        return None
-
-
-def get_dropoff_lat(url: str) -> Optional[float]:
-    try:
-        params_idx: int = url.index('?')
-        params: str = url[params_idx + 1:]
-        split = params.split('&')
-
-        dropoff = split[2].split('7C')
-        dropoff = dropoff[-1].split('%2C')
-
-        return float(dropoff[0])
-    except:
-        return None
-
-
-def get_dropoff_long(url: str) -> Optional[float]:
-    try:
-        params_idx: int = url.index('?')
-        params: str = url[params_idx + 1:]
-        split = params.split('&')
-
-        dropoff = split[2].split('7C')
-        dropoff = dropoff[-1].split('%2C')
-
-        return float(dropoff[1])
-    except:
-        return None
-
-
-def lat_long(url: str) -> Tuple[float, float, float, float]:
-    return get_pickup_lat(url), get_pickup_long(url), get_dropoff_lat(url), get_dropoff_long(url)
 
 
 def insert_trip_sql() -> None:
-    conn = con()
-    insert_sql: str = 'INSERT INTO misc.public.trips (uuid,vehicle_type, total, request_at, is_surge, distance, duration, pickup_address, dropoff_address, status, custom_route_map, chain_uuid, driver_fare, dropoff_at, pickup_latitude, pickup_longitude, dropoff_latitude, dropoff_longitude) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING '
+    insert_sql: str = 'INSERT INTO projects.public.uber_trips (uuid, request_at, dropoff_at, surge, distance, duration, status, vehicle_type, pickup_address, dropoff_address, custom_route_map) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) ON CONFLICT DO NOTHING '
 
-    while True:
-        try:
-            trip_obj = trip_data_queue.get()
-            t = trip_obj['data']['tripDetails']
-            dropoff_at: Optional[datetime] = None if t['dropoffAt'] is None else datetime.fromtimestamp(t['dropoffAt'])
-            p_lat, p_long, d_lat, d_long = lat_long(t['customRouteMap'])
+    t = trip_obj['data']['tripDetails']
+    dropoff_at: Optional[datetime] = None if t['dropoffAt'] is None else datetime.fromtimestamp(t['dropoffAt'])
+    p_lat, p_long, d_lat, d_long = lat_long(t['customRouteMap'])
 
-            data = [
-                t['uuid'], t['vehicleType'], float(t['total']), datetime.fromtimestamp(t['requestAt']),
-                t['isSurge'], float(t['distance']), int(t['duration']), t['pickupAddress'], t['dropoffAddress'],
-                t['status'], t['customRouteMap'], t['chainUuid'], float(t['driverFare']), dropoff_at, p_lat, p_long,
-                d_lat, d_long
-            ]
-            print(data)
+    data = [
+        t['uuid'], t['vehicleType'], float(t['total']), datetime.fromtimestamp(t['requestAt']),
+        t['isSurge'], float(t['distance']), int(t['duration']), t['pickupAddress'], t['dropoffAddress'],
+        t['status'], t['customRouteMap'], t['chainUuid'], float(t['driverFare']), dropoff_at, p_lat, p_long,
+        d_lat, d_long
+    ]
+    print(data)
 
-            cursor = conn.cursor()
-            cursor.execute(insert_sql, data)
+    cursor = conn.cursor()
+    cursor.execute(insert_sql, data)
 
-            conn.commit()
-            cursor.close()
-        except queue.Empty:
-            print('Done inserting trip data')
-            return
+    conn.commit()
+    cursor.close()
 
 
 def main() -> None:
-    threading.Thread(target=get_statement_uuids).start()
-
-    threading.Thread(target=get_trip_uuids_from_statement).start()
-    threading.Thread(target=get_trip_uuids_from_statement).start()
-    threading.Thread(target=get_trip_uuids_from_statement).start()
-    threading.Thread(target=get_trip_uuids_from_statement).start()
-
-    threading.Thread(target=get_trip_details).start()
-    threading.Thread(target=get_trip_details).start()
-    threading.Thread(target=get_trip_details).start()
-    threading.Thread(target=get_trip_details).start()
+    for i in range(200):
+        print(i, get_trip_data(i))
 
     insert_trip_sql()
 
