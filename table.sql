@@ -15,7 +15,7 @@ create table trips
 	status text not null,
 	vehicle_type text not null,
 	pickup_address text not null,
-	dropoff_address text,
+	dropoff_address text not null,
 	custom_route_map text not null
 );
 
